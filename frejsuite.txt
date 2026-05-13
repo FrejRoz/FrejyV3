@@ -1,5 +1,5 @@
 //@version=5
-indicator("BB Entry with POC Filter - Final", overlay=true)
+indicator("BB Entry with Exact Liq Hunter POC", overlay=true)
 
 // --- Inputs ---
 groupTime = "TIME FILTER"
@@ -25,38 +25,43 @@ i_vpRows   = input.int(24, "POC Price Rows", minval=8, group=groupPOC)
 startTime = timestamp(timeZone, startYear, startMonth, startDay, startHour, startMin)
 inDate    = useDateFilter ? (time >= startTime) : true
 
-// --- POC Calculation ---
-float customPOC = na
-if bar_index >= i_vpLen
+// --- EXACT LIQ HUNTER POC CALCULATION ---
+// Bu bölüm ilk verdiğiniz koddaki POC hesaplama mantığının (binning) aynısıdır.
+f_calculatePOC() =>
     float pHi = ta.highest(high, i_vpLen)
     float pLo = ta.lowest(low,   i_vpLen)
     float pRng = pHi - pLo
+    float resPOC = na
+    
     if pRng > 0
-        float rowHeight = pRng / i_vpRows
+        float rowH = pRng / i_vpRows
         array<float> rowVol = array.new<float>(i_vpRows, 0.0)
+        
+        // Liq Hunter Loop: Her barın Typical Price'ına göre binning yapar
         for j = 0 to i_vpLen - 1
-            float typicalPrice = (high[j] + low[j] + close[j]) / 3.0
-            int rowIdx = math.floor((typicalPrice - pLo) / rowHeight)
+            float tp = (high[j] + low[j] + close[j]) / 3.0
+            int row = math.floor((tp - pLo) / rowH)
+            row := math.max(0, math.min(row, i_vpRows - 1))
+            array.set(rowVol, row, array.get(rowVol, row) + volume[j])
             
-            // Manual clamp for compatibility
-            rowIdx := math.max(0, math.min(rowIdx, i_vpRows - 1))
-            
-            array.set(rowVol, rowIdx, array.get(rowVol, rowIdx) + volume[j])
-
-        int   maxVolIdx = 0
-        float maxVolVal = array.get(rowVol, 0)
+        int   pocIdx = 0
+        float maxV = array.get(rowVol, 0)
         for k = 1 to i_vpRows - 1
-            float currentVolume = array.get(rowVol, k)
-            if currentVolume > maxVolVal
-                maxVolVal := currentVolume
-                maxVolIdx := k
-        customPOC := pLo + (maxVolIdx + 0.5) * rowHeight
+            float rv = array.get(rowVol, k)
+            if rv > maxV
+                maxV := rv
+                pocIdx := k
+        resPOC := pLo + (pocIdx + 0.5) * rowH
+    resPOC
+
+// Her bar için POC hesapla (Filtreleme için dinamik olmalı)
+float dynamicPOC = f_calculatePOC()
 
 // --- POC Bias Logic ---
-bool isAbovePOC = not na(customPOC) and close > customPOC
-bool isBelowPOC = not na(customPOC) and close < customPOC
+bool isAbovePOC = not na(dynamicPOC) and close > dynamicPOC
+bool isBelowPOC = not na(dynamicPOC) and close < dynamicPOC
 
-// --- Indicators ---
+// --- Indicators (BB) ---
 [middle, upper, lower] = ta.bb(close, bbLength, bbMult)
 
 // --- State Tracking ---
@@ -66,34 +71,25 @@ var float totalBuyCost = 0.0
 var int buyCount = 0
 
 if inDate
-    // Long State logic
     if low <= lower
         isBuying := true
     if close >= middle
         isBuying := false
         totalBuyCost := 0.0 
         buyCount := 0
-    // Short State logic
     if high >= upper
         isSelling := true
     if close <= middle
         isSelling := false
-else
-    isBuying := false
-    isSelling := false
-    totalBuyCost := 0.0
-    buyCount := 0
 
-// --- Signal Logic with POC Filter ---
+// --- Signal Logic ---
 canLong  = false
 canShort = false
 
 if inDate
-    // Only fire BUY if Price > POC
     if (tradeSide == "Long" or tradeSide == "Both") and isAbovePOC
         canLong := (entryMode == "Bottom Only") ? low <= lower : (isBuying and (low <= lower or close < middle))
     
-    // Only fire SELL if Price < POC
     if (tradeSide == "Short" or tradeSide == "Both") and isBelowPOC
         canShort := (entryMode == "Bottom Only") ? high >= upper : (isSelling and (high >= upper or close > middle))
 
@@ -101,15 +97,17 @@ if inDate
 if canLong
     totalBuyCost += close
     buyCount += 1
-
 float avgEntry = buyCount > 0 ? totalBuyCost / buyCount : na
 
 // --- Plotting ---
-plot(customPOC, "POC Line", color=color.new(color.yellow, 50), linewidth=2)
+// POC Çizgisi (Dinamik - Liq Hunter ile aynı seviyede olması için)
+plot(dynamicPOC, "Liq Hunter POC", color=color.new(color.yellow, 30), linewidth=2)
+
+// Sinyaller
 plotshape(canLong,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="$",  textcolor=color.white)
 plotshape(canShort, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="$", textcolor=color.white)
 
-// --- Table ---
+// Ortalama Maliyet Tablosu
 var table avgTable = table.new(position.middle_right, 2, 1, bgcolor=color.new(color.black, 80), border_width=1)
 if barstate.islast and buyCount > 0
     table.cell(avgTable, 0, 0, "AVG. BUY", text_color=color.white)
