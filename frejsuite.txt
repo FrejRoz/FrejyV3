@@ -1,0 +1,120 @@
+//@version=5
+indicator("BB Entry with POC Filter - Final", overlay=true)
+
+// --- Inputs ---
+groupTime = "TIME FILTER"
+useDateFilter = input.bool(true, "Use Start Date Filter", group=groupTime)
+timeZone      = input.string("America/New_York", "Timezone", group=groupTime)
+startYear     = input.int(2026, "Start Year", group=groupTime)
+startMonth    = input.int(5, "Start Month", group=groupTime)
+startDay      = input.int(13, "Start Day", group=groupTime)
+startHour     = input.int(3, "Start Hour", group=groupTime)
+startMin      = input.int(15, "Start Minute", group=groupTime)
+
+groupStrat = "STRATEGY SETTINGS"
+tradeSide  = input.string("Both", "Trade Side", options=["Long", "Short", "Both"], group=groupStrat)
+entryMode  = input.string("Bottom to Center", "Entry Mode", options=["Bottom Only", "Bottom to Center"], group=groupStrat)
+bbLength   = input.int(20, "BB Length", group=groupStrat)
+bbMult     = input.float(2.0, "BB StdDev", group=groupStrat)
+
+groupPOC = "POC FILTER SETTINGS"
+i_vpLen    = input.int(50, "POC Lookback Bars", minval=10, group=groupPOC)
+i_vpRows   = input.int(24, "POC Price Rows", minval=8, group=groupPOC)
+
+// --- Time Logic ---
+startTime = timestamp(timeZone, startYear, startMonth, startDay, startHour, startMin)
+inDate    = useDateFilter ? (time >= startTime) : true
+
+// --- POC Calculation ---
+float customPOC = na
+if bar_index >= i_vpLen
+    float pHi = ta.highest(high, i_vpLen)
+    float pLo = ta.lowest(low,   i_vpLen)
+    float pRng = pHi - pLo
+    if pRng > 0
+        float rowHeight = pRng / i_vpRows
+        array<float> rowVol = array.new<float>(i_vpRows, 0.0)
+        for j = 0 to i_vpLen - 1
+            float typicalPrice = (high[j] + low[j] + close[j]) / 3.0
+            int rowIdx = math.floor((typicalPrice - pLo) / rowHeight)
+            
+            // Manual clamp for compatibility
+            rowIdx := math.max(0, math.min(rowIdx, i_vpRows - 1))
+            
+            array.set(rowVol, rowIdx, array.get(rowVol, rowIdx) + volume[j])
+
+        int   maxVolIdx = 0
+        float maxVolVal = array.get(rowVol, 0)
+        for k = 1 to i_vpRows - 1
+            float currentVolume = array.get(rowVol, k)
+            if currentVolume > maxVolVal
+                maxVolVal := currentVolume
+                maxVolIdx := k
+        customPOC := pLo + (maxVolIdx + 0.5) * rowHeight
+
+// --- POC Bias Logic ---
+bool isAbovePOC = not na(customPOC) and close > customPOC
+bool isBelowPOC = not na(customPOC) and close < customPOC
+
+// --- Indicators ---
+[middle, upper, lower] = ta.bb(close, bbLength, bbMult)
+
+// --- State Tracking ---
+var bool isBuying  = false
+var bool isSelling = false
+var float totalBuyCost = 0.0
+var int buyCount = 0
+
+if inDate
+    // Long State logic
+    if low <= lower
+        isBuying := true
+    if close >= middle
+        isBuying := false
+        totalBuyCost := 0.0 
+        buyCount := 0
+    // Short State logic
+    if high >= upper
+        isSelling := true
+    if close <= middle
+        isSelling := false
+else
+    isBuying := false
+    isSelling := false
+    totalBuyCost := 0.0
+    buyCount := 0
+
+// --- Signal Logic with POC Filter ---
+canLong  = false
+canShort = false
+
+if inDate
+    // Only fire BUY if Price > POC
+    if (tradeSide == "Long" or tradeSide == "Both") and isAbovePOC
+        canLong := (entryMode == "Bottom Only") ? low <= lower : (isBuying and (low <= lower or close < middle))
+    
+    // Only fire SELL if Price < POC
+    if (tradeSide == "Short" or tradeSide == "Both") and isBelowPOC
+        canShort := (entryMode == "Bottom Only") ? high >= upper : (isSelling and (high >= upper or close > middle))
+
+// --- Avg Entry Calc ---
+if canLong
+    totalBuyCost += close
+    buyCount += 1
+
+float avgEntry = buyCount > 0 ? totalBuyCost / buyCount : na
+
+// --- Plotting ---
+plot(customPOC, "POC Line", color=color.new(color.yellow, 50), linewidth=2)
+plotshape(canLong,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="$",  textcolor=color.white)
+plotshape(canShort, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="$", textcolor=color.white)
+
+// --- Table ---
+var table avgTable = table.new(position.middle_right, 2, 1, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast and buyCount > 0
+    table.cell(avgTable, 0, 0, "AVG. BUY", text_color=color.white)
+    table.cell(avgTable, 1, 0, str.tostring(avgEntry, format.mintick), text_color=color.yellow)
+
+plot(middle, color=color.gray, title="BB Middle")
+plot(upper,  color=color.red,  title="BB Upper")
+plot(lower,  color=color.green, title="BB Lower")
