@@ -1,5 +1,5 @@
 //@version=5
-indicator("BB Continuous Entry Strategy - Full", overlay=true)
+indicator("BB Continuous Entry Strategy  Full", overlay=true)
 
 // --- Inputs ---
 groupTime = "TIME FILTER"
