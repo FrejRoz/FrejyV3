@@ -1,0 +1,84 @@
+//@version=5
+indicator("BB Continuous Entry Strategy - Full", overlay=true)
+
+// --- Inputs ---
+groupTime = "TIME FILTER"
+useDateFilter = input.bool(true, "Use Start Date Filter", group=groupTime)
+timeZone      = input.string("America/New_York", "Timezone", group=groupTime)
+startYear     = input.int(2026, "Start Year", group=groupTime)
+startMonth    = input.int(5, "Start Month", group=groupTime)
+startDay      = input.int(13, "Start Day", group=groupTime)
+startHour     = input.int(3, "Start Hour", group=groupTime)
+startMin      = input.int(15, "Start Minute", group=groupTime)
+
+groupStrat = "STRATEGY SETTINGS"
+tradeSide  = input.string("Both", "Trade Side", options=["Long", "Short", "Both"], group=groupStrat)
+entryMode  = input.string("Bottom to Center", "Entry Mode", options=["Bottom Only", "Bottom to Center"], group=groupStrat)
+bbLength   = input.int(20, "BB Length", group=groupStrat)
+bbMult     = input.float(2.0, "BB StdDev", group=groupStrat)
+
+// --- Time Logic ---
+startTime = timestamp(timeZone, startYear, startMonth, startDay, startHour, startMin)
+inDate    = useDateFilter ? (time >= startTime) : true
+
+// --- Indicators ---
+[middle, upper, lower] = ta.bb(close, bbLength, bbMult)
+
+// --- State Tracking ---
+var bool isBuying  = false
+var bool isSelling = false
+var float totalBuyCost = 0.0
+var int buyCount = 0
+
+if inDate
+    // Long State
+    if low <= lower
+        isBuying := true
+    if close >= middle
+        isBuying := false
+        totalBuyCost := 0.0 
+        buyCount := 0
+    // Short State
+    if high >= upper
+        isSelling := true
+    if close <= middle
+        isSelling := false
+else
+    isBuying := false
+    isSelling := false
+    totalBuyCost := 0.0
+    buyCount := 0
+
+// --- Signal Logic ---
+// Logic: If "Bottom Only", trigger only on touch. 
+// If "Bottom to Center", trigger on touch OR if state is active and we are in the zone.
+canLong  = false
+canShort = false
+
+if inDate
+    if (tradeSide == "Long" or tradeSide == "Both")
+        canLong := (entryMode == "Bottom Only") ? low <= lower : (isBuying and (low <= lower or close < middle))
+    
+    if (tradeSide == "Short" or tradeSide == "Both")
+        canShort := (entryMode == "Bottom Only") ? high >= upper : (isSelling and (high >= upper or close > middle))
+
+// --- Avg Entry Calc ---
+if canLong
+    totalBuyCost += close
+    buyCount += 1
+
+float avgEntry = buyCount > 0 ? totalBuyCost / buyCount : na
+
+// --- Plotting ---
+plotshape(canLong,  title="Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="$",  textcolor=color.white)
+plotshape(canShort, title="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="$", textcolor=color.white)
+
+// --- Table ---
+var table avgTable = table.new(position.middle_right, 2, 1, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast and buyCount > 0
+    table.cell(avgTable, 0, 0, "AVG. BUY", text_color=color.white)
+    table.cell(avgTable, 1, 0, str.tostring(avgEntry, format.mintick), text_color=color.yellow)
+
+plot(middle, color=color.gray, title="BB Middle")
+plot(upper,  color=color.red,  title="BB Upper")
+plot(lower,  color=color.green, title="BB Lower")
