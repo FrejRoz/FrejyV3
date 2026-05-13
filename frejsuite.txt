@@ -1,5 +1,5 @@
 //@version=5
-indicator("BB Entry with Exact Liq Hunter POC - Confirmed", overlay=true)
+indicator("FrejV3", overlay=true)
 
 // --- Inputs ---
 groupTime = "TIME FILTER"
@@ -50,8 +50,6 @@ f_calculatePOC() =>
     resPOC
 
 float dynamicPOC = f_calculatePOC()
-
-// --- POC Bias Logic ---
 bool isAbovePOC = not na(dynamicPOC) and close > dynamicPOC
 bool isBelowPOC = not na(dynamicPOC) and close < dynamicPOC
 
@@ -61,6 +59,8 @@ bool isBelowPOC = not na(dynamicPOC) and close < dynamicPOC
 // --- State Tracking ---
 var bool isBuying  = false
 var bool isSelling = false
+
+// PERMANENT TRACKING (Asla sıfırlanmaz)
 var float totalBuyCost = 0.0
 var int buyCount = 0
 
@@ -69,49 +69,44 @@ if inDate
         isBuying := true
     if close >= middle
         isBuying := false
-        totalBuyCost := 0.0 
-        buyCount := 0
+
     if high >= upper
         isSelling := true
     if close <= middle
         isSelling := false
 
 // --- Signal Logic ---
-canLong  = false
-canShort = false
+canLong  = (inDate and (tradeSide == "Long" or tradeSide == "Both") and isAbovePOC) ? ((entryMode == "Bottom Only") ? low <= lower : (isBuying and (low <= lower or close < middle))) : false
+canShort = (inDate and (tradeSide == "Short" or tradeSide == "Both") and isBelowPOC) ? ((entryMode == "Bottom Only") ? high >= upper : (isSelling and (high >= upper or close > middle))) : false
 
-if inDate
-    if (tradeSide == "Long" or tradeSide == "Both") and isAbovePOC
-        canLong := (entryMode == "Bottom Only") ? low <= lower : (isBuying and (low <= lower or close < middle))
-    
-    if (tradeSide == "Short" or tradeSide == "Both") and isBelowPOC
-        canShort := (entryMode == "Bottom Only") ? high >= upper : (isSelling and (high >= upper or close > middle))
-
-// --- Avg Entry Calc ---
-if canLong
-    totalBuyCost += close
-    buyCount += 1
-float avgEntry = buyCount > 0 ? totalBuyCost / buyCount : na
-
-// --- Confirmed Signals (Label Control) ---
-// Sinyallerin sadece mum kapandığında (confirmed) görünmesini sağlar.
+// --- Confirmed Signals & Cumulative Calculation ---
 bool confirmedLong  = canLong and barstate.isconfirmed
 bool confirmedShort = canShort and barstate.isconfirmed
 
+if confirmedLong
+    totalBuyCost += close
+    buyCount += 1
+
+float avgEntry = buyCount > 0 ? totalBuyCost / buyCount : na
+
 // --- Plotting ---
 plot(dynamicPOC, "Liq Hunter POC", color=color.new(color.yellow, 30), linewidth=2)
+plotshape(confirmedLong,  title="Confirmed Buy Label",  style=shape.labelup,   location=location.belowbar, color=color.green, text="$",  textcolor=color.white)
+plotshape(confirmedShort, title="Confirmed Sell Label", style=shape.labeldown, location=location.abovebar, color=color.red,   text="$", textcolor=color.white)
 
-// Sinyal Etiketleri (Sadece Mum Kapandığında Basılır)
-plotshape(confirmedLong,  title="Confirmed Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, text="$",  textcolor=color.white)
-plotshape(confirmedShort, title="Confirmed Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   text="$", textcolor=color.white)
-
-// BB Kanalları
 plot(middle, color=color.gray, title="BB Middle")
 plot(upper,  color=color.red,  title="BB Upper")
 plot(lower,  color=color.green, title="BB Lower")
 
+// --- AVG Entry Table ---
+var table avgTable = table.new(position.middle_right, 3, 1, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    table.cell(avgTable, 0, 0, "TOTAL: " + str.tostring(buyCount), text_color=color.white)
+    table.cell(avgTable, 1, 0, "AVG:", text_color=color.white)
+    table.cell(avgTable, 2, 0, buyCount > 0 ? str.tostring(avgEntry, format.mintick) : "---", text_color=color.yellow)
+
 // --- ALERTS ---
-// Alarmlar zaten genellikle mum kapanışında kurulur, 
-// ancak burada sinyalleri direkt 'confirmed' değişkenine bağladık.
-alertcondition(confirmedLong, title="Buy Alert", message="Buy Signal Confirmed on Close!")
-alertcondition(confirmedShort, title="Sell Alert", message="Sell Signal Confirmed on Close!")
+// Bu alarmlar sadece mum kapandığında ve tüm şartlar onaylandığında çalar.
+alertcondition(confirmedLong, title="Buy Alert", message="BUY Signal Confirmed! Price: {{close}}, Avg Cost: {{plot_0}}")
+alertcondition(confirmedShort, title="Sell Alert", message="SELL Signal Confirmed! Price: {{close}}")
+alertcondition(confirmedLong or confirmedShort, title="Any Signal Alert", message="New BB Condition Met!")
